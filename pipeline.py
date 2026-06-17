@@ -1,17 +1,25 @@
 """
-Agentic news-monitoring pipeline — multi-feed version.
+Agentic news-monitoring pipeline — multi-feed version with Claude API analysis.
 
 Feed list (names + output folders) lives in feeds.json, which is plain
 config and safe to commit. Each feed's actual RSS URL is supplied via
 its own environment variable (named in feeds.json), set as a GitHub
 Actions secret. No URL is ever hardcoded or committed.
 
+For each new article:
+1. Fetch and extract text from the URL
+2. Send to Claude API for analysis:
+   - French summary
+   - Sentiment toward LFI/Mélenchon (including propaganda talking points)
+   - Author background if available
+3. Write comprehensive markdown file with metadata, analysis, and original Norwegian text
+
 Secrets required (set as GitHub Actions secrets, injected as env vars):
   - one per feed, named whatever feeds.json says (e.g. RSS_URL_LFI_MELENCHON)
-  - ANTHROPIC_API_KEY      : (used in a later step, not yet wired in here)
+  - ANTHROPIC_API_KEY  : Claude API key for article analysis
 
 Run locally for testing a single feed:
-  RSS_URL_LFI_MELENCHON="https://..." python pipeline.py
+  RSS_URL_LFI_MELENCHON="https://..." ANTHROPIC_API_KEY="sk-..." python pipeline.py
 """
 
 import hashlib
@@ -20,9 +28,11 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import feedparser
 import trafilatura
+import requests
 
 CONFIG_PATH = Path(__file__).parent / "feeds.json"
 
@@ -83,7 +93,71 @@ def extract_article_text(url: str) -> str | None:
         return None
 
 
-def write_article_markdown(entry, extracted_text: str | None, output_dir: Path) -> Path:
+def analyze_article_with_claude(article_text: str, url: str) -> dict | None:
+    """Send article to Claude for analysis: French summary, sentiment toward
+    LFI/Mélenchon (including propaganda talking points), author CV if available.
+    Returns a dict with analysis, or None on API failure."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("WARNING: ANTHROPIC_API_KEY not set, skipping Claude analysis", file=sys.stderr)
+        return None
+
+    domain = urlparse(url).netloc
+
+    prompt = f"""Analyze this Norwegian news article about French politics, LFI, or Mélenchon.
+
+**Article URL:** {url}
+**Source domain:** {domain}
+
+---
+
+{article_text}
+
+---
+
+Return ONLY a JSON object (no markdown, no preamble) with these fields:
+
+{{
+  "summary_fr": "2-3 sentence summary in French of the article's main points",
+  "sentiment_fr": "French analysis: Is the tone positive, negative, or neutral toward LFI/Mélenchon? Note any common propaganda talking points (antisemitic tropes, 'brutal,' 'Islamist,' etc.) that appear and deserve correction. 2-3 paragraphs.",
+  "author_name": "Author name if found in the article, or null",
+  "author_cv": "2-3 sentence background/credentials of the author if available, in French, or null",
+}}
+
+Return ONLY the JSON object, with no additional text or markdown formatting."""
+
+    try:
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # Extract text from Claude's response
+        content = data.get("content", [])
+        if not content or content[0].get("type") != "text":
+            return None
+
+        text = content[0]["text"]
+        # Claude might wrap JSON in markdown backticks; strip them
+        text = text.replace("```json", "").replace("```", "").strip()
+        return json.loads(text)
+
+    except Exception as e:
+        print(f"WARNING: Claude API call failed: {e}", file=sys.stderr)
+        return None
+
+
+def write_article_markdown(entry, extracted_text: str | None, output_dir: Path, analysis: dict | None = None) -> Path:
     slug = slugify_url(entry.link)
     path = output_dir / f"{slug}.md"
 
@@ -92,23 +166,56 @@ def write_article_markdown(entry, extracted_text: str | None, output_dir: Path) 
     published = getattr(entry, "published", "unknown")
     fetched_at = datetime.now(timezone.utc).isoformat()
 
-    body = extracted_text if extracted_text else "_Extraction failed or content unavailable._"
+    # Metadata section
+    domain = urlparse(link).netloc
+    author_name = analysis.get("author_name") if analysis else None
+    author_cv = analysis.get("author_cv") if analysis else None
 
-    content = f"""# {title}
+    metadata = f"""# {title}
 
-- **Source URL:** {link}
-- **Published (per feed):** {published}
+## Metadata
+
+- **URL:** {link}
+- **Site:** {domain}
+- **Published:** {published}
 - **Fetched:** {fetched_at}
-- **Extraction status:** {"ok" if extracted_text else "failed"}
-
-## Raw extracted text
-
-{body}
-
-## LLM summary (Norwegian → English/French, sentiment, themes)
-
-_TODO: Claude API call goes here. Not yet wired in._
+- **Author:** {author_name if author_name else "Unknown"}
 """
+
+    # Analysis section (if available)
+    analysis_section = ""
+    if analysis:
+        summary_fr = analysis.get("summary_fr", "")
+        sentiment_fr = analysis.get("sentiment_fr", "")
+
+        analysis_section = f"""
+## Analyse (Français)
+
+### Résumé
+{summary_fr}
+
+### Sentiment & Analyse critique
+{sentiment_fr}
+"""
+        if author_cv:
+            analysis_section += f"""
+### Auteur (Background)
+{author_cv}
+"""
+
+    # Original text section
+    text_section = ""
+    if extracted_text:
+        text_section = f"""
+## Texte original (Norvégien)
+
+{extracted_text}
+"""
+    else:
+        text_section = "\n## Texte original (Norvégien)\n\n_Extraction failed or content unavailable._"
+
+    content = metadata + analysis_section + text_section
+
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -139,7 +246,14 @@ def process_feed(feed_config: dict) -> int:
 
         print(f"  New article: {link}")
         text = extract_article_text(link)
-        path = write_article_markdown(entry, text, output_dir)
+        
+        # Call Claude to analyze the article
+        analysis = None
+        if text:
+            print(f"    Analyzing with Claude...")
+            analysis = analyze_article_with_claude(text, link)
+        
+        path = write_article_markdown(entry, text, output_dir, analysis)
         print(f"    -> wrote {path}")
         new_count += 1
 
