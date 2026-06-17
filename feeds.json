@@ -1,0 +1,14 @@
+{
+  "feeds": [
+    {
+      "name": "lfi-melenchon",
+      "env_var": "RSS_URL_LFI_MELENCHON",
+      "output_dir": "articles/lfi-melenchon"
+    },
+    {
+      "name": "lfi-general",
+      "env_var": "RSS_URL_LFI_GENERAL",
+      "output_dir": "articles/lfi-general"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+name: poll-news-feed
+
+on:
+  schedule:
+    # Every hour. GitHub's scheduled triggers are best-effort and can lag
+    # during high load, which is fine for a news digest.
+    - cron: "0 * * * *"
+  workflow_dispatch: {}  # lets you manually trigger a run from the Actions tab
+
+permissions:
+  contents: write  # needed so the workflow can commit new article files back
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          # One secret per feed. Add a line here each time you add a
+          # feed to feeds.json — the env var name must match what's
+          # in that file's "env_var" field.
+          RSS_URL_LFI_MELENCHON: ${{ secrets.RSS_URL_LFI_MELENCHON }}
+          RSS_URL_LFI_GENERAL: ${{ secrets.RSS_URL_LFI_GENERAL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python pipeline.py
+
+      - name: Commit new articles
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add articles/
+          git diff --cached --quiet || git commit -m "Add new articles $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
