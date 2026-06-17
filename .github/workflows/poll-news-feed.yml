@@ -4,7 +4,7 @@ on:
   schedule:
     # Every hour. GitHub's scheduled triggers are best-effort and can lag
     # during high load, which is fine for a news digest.
-    - cron: "0 8,16 * * *"
+    - cron: "0 * * * *"
   workflow_dispatch: {}  # lets you manually trigger a run from the Actions tab
 
 permissions:
@@ -35,6 +35,18 @@ jobs:
           RSS_URL_LFI_GENERAL: ${{ secrets.RSS_URL_LFI_GENERAL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python pipeline.py
+
+      - name: Notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          ARTICLE_COUNT=$(find articles/ -name "*.md" -type f | wc -l)
+          if [ "$ARTICLE_COUNT" -gt 0 ]; then
+            curl -X POST "$DISCORD_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"content\": \"📰 **fjord-tracker**: Found $ARTICLE_COUNT new article(s) about LFI/Mélenchon\n\nCheck the repo: https://github.com/eiffel-no/fjord-tracker/tree/main/articles\"}"
+          fi
 
       - name: Commit new articles
         run: |
