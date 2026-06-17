@@ -121,7 +121,7 @@ Return ONLY a JSON object (no markdown, no preamble) with these fields:
   "summary_fr": "2-3 sentence summary in French of the article's main points",
   "sentiment_fr": "French analysis: Is the tone positive, negative, or neutral toward LFI/Mélenchon? Note any common propaganda talking points (antisemitic tropes, 'brutal,' 'Islamist,' etc.) that appear and deserve correction. 2-3 paragraphs.",
   "author_name": "Author name if found in the article, or null",
-  "author_cv": "2-3 sentence background/credentials of the author if available, in French, or null",
+  "author_cv": "2-3 sentence background/credentials of the author if available, in French, or null"
 }}
 
 Return ONLY the JSON object, with no additional text or markdown formatting."""
