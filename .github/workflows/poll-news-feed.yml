@@ -13,6 +13,7 @@ permissions:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    environment: NO
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
