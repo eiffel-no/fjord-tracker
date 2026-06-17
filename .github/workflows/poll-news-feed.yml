@@ -4,7 +4,7 @@ on:
   schedule:
     # Every hour. GitHub's scheduled triggers are best-effort and can lag
     # during high load, which is fine for a news digest.
-    - cron: "0 * * * *"
+    - cron: "0 8,16 * * *"
   workflow_dispatch: {}  # lets you manually trigger a run from the Actions tab
 
 permissions:
